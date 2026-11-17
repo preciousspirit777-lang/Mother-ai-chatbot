@@ -71,7 +71,7 @@ if prompt := st.chat_input("Ask Mother AI anything..."):
     with st.spinner("Mother AI is thinking..."):
         try:
             response = client.models.generate_content(
-                model="models/gemini-2.5-flash", # Using a stable model name
+                model="models/gemini-3.8-flash", # Using a stable model name
                 contents=prompt,
             )
             ai_text = response.text
