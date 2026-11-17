@@ -1,81 +1,199 @@
+
 import streamlit as st
 import sqlite3
 from google import genai
-from google.genai.types import HttpOptions
+from google.genai import types
 
-st.title("🤖 Mother AI: Database Chatbot")
-st.write("Your conversations are permanently saved.")
+# =====================================
+# MOTHER AI CONFIGURATION
+# =====================================
 
-# --- DATABASE SETUP (unchanged) ---
+MODEL = "gemini-3.8-flash"
+DB_NAME = "mother_ai.db"
+
+st.set_page_config(
+    page_title="Mother AI",
+    page_icon="🤖"
+)
+
+st.title("🤖 Mother AI")
+st.caption("Celesta Tech | Intelligent Working System")
+
+# =====================================
+# DATABASE
+# =====================================
+
 def init_db():
-    conn = sqlite3.connect('mother_ai.db')
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS chat_history
-                 (role TEXT, message TEXT)''')
-    conn.commit()
-    conn.close()
+    with sqlite3.connect(DB_NAME) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS chat_history (
+                role TEXT,
+                message TEXT
+            )
+        """)
+
+def save_message(role, message):
+    with sqlite3.connect(DB_NAME) as conn:
+        conn.execute(
+            "INSERT INTO chat_history VALUES (?, ?)",
+            (role, message)
+        )
+
+def load_messages(limit=20):
+    with sqlite3.connect(DB_NAME) as conn:
+        rows = conn.execute(
+            """
+            SELECT role, message
+            FROM chat_history
+            ORDER BY rowid DESC
+            LIMIT ?
+            """,
+            (limit,)
+        ).fetchall()
+
+    return list(reversed(rows))
+
+def clear_history():
+    with sqlite3.connect(DB_NAME) as conn:
+        conn.execute("DELETE FROM chat_history")
 
 init_db()
 
-def save_message(role, message):
-    conn = sqlite3.connect('mother_ai.db')
-    c = conn.cursor()
-    c.execute("INSERT INTO chat_history (role, message) VALUES (?, ?)", (role, message))
-    conn.commit()
-    conn.close()
+# =====================================
+# SIDEBAR
+# =====================================
 
-def load_messages():
-    conn = sqlite3.connect('mother_ai.db')
-    c = conn.cursor()
-    c.execute("SELECT role, message FROM chat_history")
-    rows = c.fetchall()
-    conn.close()
-    return rows
-
-# --- UI SETUP (unchanged) ---
 with st.sidebar:
     st.header("Settings")
-    api_key = st.text_input("Enter Gemini API Key:", type="password")
+
+    api_key = st.text_input(
+        "Gemini API Key",
+        type="password"
+    )
+
     if st.button("Clear Chat History"):
-        conn = sqlite3.connect('mother_ai.db')
-        c = conn.cursor()
-        c.execute("DELETE FROM chat_history")
-        conn.commit()
-        conn.close()
+        clear_history()
         st.rerun()
 
 if not api_key:
-    st.info("👈 Enter your API key in the sidebar to start chatting.")
+    st.info("Enter your Gemini API key to begin.")
     st.stop()
 
-# --- AI CLIENT SETUP (Corrected) ---
-client = genai.Client(
-    api_key=api_key,
-    http_options=HttpOptions(api_version="v1")
+# =====================================
+# AI CLIENT
+# =====================================
+
+retry_options = types.HttpRetryOptions(
+    attempts=3,
+    initial_delay=2.0,
+    max_delay=15.0,
+    http_status_codes=[408, 429, 500, 502, 503, 504]
 )
 
-# Load previous messages
-history = load_messages()
-for role, msg in history:
-    with st.chat_message(role):
-        st.markdown(msg)
+client = genai.Client(
+    api_key=api_key,
+    http_options=types.HttpOptions(
+        api_version="v1",
+        retry_options=retry_options
+    )
+)
 
-# Chat input
-if prompt := st.chat_input("Ask Mother AI anything..."):
-    st.chat_message("user").markdown(prompt)
+# =====================================
+# SYSTEM INSTRUCTION
+# =====================================
+
+SYSTEM_INSTRUCTION = """
+You are Mother AI, the central intelligence
+assistant of Celesta Tech.
+
+Your responsibilities are:
+
+1. Help users understand concepts.
+2. Assist with software engineering.
+3. Organize ideas and projects.
+4. Maintain context from supplied conversation history.
+5. Explain your reasoning clearly.
+6. Never invent information when uncertain.
+
+You are a developing AI assistant.
+Do not claim capabilities that have not
+actually been implemented.
+"""
+
+# =====================================
+# DISPLAY HISTORY
+# =====================================
+
+history = load_messages()
+
+for role, message in history:
+    with st.chat_message(role):
+        st.markdown(message)
+
+# =====================================
+# GENERATE RESPONSE
+# =====================================
+
+if prompt := st.chat_input("Talk to Mother AI..."):
+
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
     save_message("user", prompt)
 
-    with st.spinner("Thinking..."):
-        try:
-            # The correct model name and method
-            response = client.models.generate_content(
-                model="gemini-3.8-flash",
-                contents=prompt,
-            )
-            ai_text = response.text
-        except Exception as e:
-            ai_text = f"❌ Error: {e}"
+    # Reload history, including current message
+    history = load_messages()
+
+    # Convert database history into Gemini format
+    conversation = []
+
+    for role, message in history:
+        conversation.append({
+            "role": "user" if role == "user" else "model",
+            "parts": [{"text": message}]
+        })
 
     with st.chat_message("assistant"):
-        st.markdown(ai_text)
+
+        with st.spinner("Mother AI is thinking..."):
+
+            try:
+                response = client.models.generate_content(
+                    model=MODEL,
+                    contents=conversation,
+                    config=types.GenerateContentConfig(
+                        system_instruction=SYSTEM_INSTRUCTION,
+                        max_output_tokens=1500
+                    )
+                )
+
+                ai_text = response.text or (
+                    "I couldn't generate a text response."
+                )
+
+            except Exception as error:
+
+                error_code = getattr(error, "code", None)
+
+                if error_code == 503:
+                    ai_text = (
+                        "Mother AI is temporarily busy. "
+                        "Please try again shortly."
+                    )
+
+                elif error_code == 429:
+                    ai_text = (
+                        "The AI service has reached a usage "
+                        "limit. Please try again later."
+                    )
+
+                else:
+                    ai_text = (
+                        "An unexpected error occurred. "
+                        "Please check your API configuration "
+                        "and try again."
+                    )
+
+            st.markdown(ai_text)
+
     save_message("assistant", ai_text)
