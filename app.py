@@ -1,6 +1,7 @@
 import streamlit as st
 import sqlite3
 from google import genai
+from google.genai import types # <-- NEW IMPORT
 
 st.title("🤖 Mother AI: Database Chatbot")
 st.write("Your conversations are permanently saved.")
@@ -35,7 +36,6 @@ def load_messages():
 with st.sidebar:
     st.header("Settings")
     api_key = st.text_input("Enter Gemini API Key:", type="password")
-    
     if st.button("Clear Chat History"):
         conn = sqlite3.connect('mother_ai.db')
         c = conn.cursor()
@@ -48,9 +48,10 @@ if not api_key:
     st.info("👈 Enter your API key in the sidebar to start chatting.")
     st.stop()
 
-# Initialize the AI client
+# --- AI CLIENT SETUP (THE FIX) ---
 try:
-    client = genai.Client(api_key=api_key)
+    # This forces the API to use the version that supports the newest models
+    client = genai.Client(api_key=api_key, http_options=types.HttpOptions(api_version='v1beta'))
 except Exception as e:
     st.error(f"Failed to connect: {e}")
     st.stop()
@@ -63,15 +64,14 @@ for role, msg in history:
 
 # Chat input
 if prompt := st.chat_input("Ask Mother AI anything..."):
-    # 1. Display and save user message
     st.chat_message("user").markdown(prompt)
     save_message("user", prompt)
 
-    # 2. Generate and save AI response
-    with st.spinner("Mother AI is thinking..."):
+    with st.spinner("Thinking..."):
         try:
+            # Using a stable model name
             response = client.models.generate_content(
-                model="models/gemini-1.5-flash", # Using a stable model name
+                model="gemini-2.0-flash", 
                 contents=prompt,
             )
             ai_text = response.text
